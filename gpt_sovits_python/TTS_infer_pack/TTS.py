@@ -11,8 +11,15 @@ import os
 from typing import Generator, List, Union
 import numpy as np
 import torch
+import shutil
+import psutil
+import signal
+import platform
+import json
 import torch.nn.functional as F
 import yaml
+import datetime
+from subprocess import Popen
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 from gpt_sovits_python.TTS_infer_pack.setup_logger import logger
 from gpt_sovits_python.AR.models.t2s_lightning_module import Text2SemanticLightningModule
@@ -74,6 +81,7 @@ class TTS_Config:
                 "is_half": False,
                 "t2s_weights_path": "pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt",
                 "vits_weights_path": "pretrained_models/s2G488k.pth",
+                "pretrained_s2D": "pretrained_models/s2D488k.pth",
                 "cnhuhbert_base_path": "pretrained_models/chinese-hubert-base",
                 "bert_base_path": "pretrained_models/chinese-roberta-wwm-ext-large",
             }
@@ -109,6 +117,7 @@ class TTS_Config:
         self.vits_weights_path = self.configs.get("vits_weights_path", None)
         self.bert_base_path = self.configs.get("bert_base_path", None)
         self.cnhuhbert_base_path = self.configs.get("cnhuhbert_base_path", None)
+        self.pretrained_s2D = self.configs.get("pretrained_s2D", None)
 
         
         if (self.t2s_weights_path in [None, ""]) or (not os.path.exists(self.t2s_weights_path)):
@@ -123,6 +132,9 @@ class TTS_Config:
         if (self.cnhuhbert_base_path in [None, ""]) or (not os.path.exists(self.cnhuhbert_base_path)):
             self.cnhuhbert_base_path = self.default_configs['cnhuhbert_base_path']
             logger.debug(f"fall back to default cnhuhbert_base_path: {self.cnhuhbert_base_path}")
+        if (self.pretrained_s2D in [None, ""]) or (not os.path.exists(self.pretrained_s2D)):
+            self.pretrained_s2D = self.default_configs['pretrained_s2D']
+            logger.debug(f"fall back to default pretrained_s2D: {self.pretrained_s2D}")
         self.update_configs()
         
         
@@ -909,7 +921,285 @@ class TTS:
         
         return sr, audio
             
+    def train(self, inputs:dict):
+        python_exec = sys.executable or "python"
+        tmp = os.path.join(now_dir, "TEMP")
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        os.makedirs(tmp, exist_ok=True)
+        os.makedirs(inputs.get("sovits_weight_root"), exist_ok=True)
+        os.makedirs(inputs.get("gpt_weight_root"), exist_ok=True)
+        os.environ["TEMP"] = tmp
+        if(os.path.exists(tmp)):
+            for name in os.listdir(tmp):
+                if(name=="jieba.cache"):continue
+                path="%s/%s"%(tmp,name)
+                delete=os.remove if os.path.isfile(path) else shutil.rmtree
+                try:
+                    delete(path)
+                except Exception as e:
+                    print(str(e))
+                    pass
+        def clean_path(path_str):
+            if platform.system() == 'Windows':
+                path_str = path_str.replace('/', '\\')
+            return path_str.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
         
+        # inp_text 文本标注路径
+        def open1abc():
+            ps1abc=[]
+            inp_text = clean_path(inputs.get("inp_text"))
+            inp_wav_dir = clean_path(inputs.get("inp_wav_dir"))
+            if (ps1abc == []):
+                opt_dir="%s/%s"%(inputs.get("exp_root"), inputs.get("exp_name"))
+                os.makedirs(opt_dir, exist_ok=True)
+                try:
+                    #############################1a
+                    path_text="%s/2-name2text.txt" % opt_dir
+                    if(os.path.exists(path_text)==False or (os.path.exists(path_text)==True and len(open(path_text,"r",encoding="utf8").read().strip("\n").split("\n"))<2)):
+                        config={
+                            "inp_text":inp_text,
+                            "inp_wav_dir":inp_wav_dir,
+                            "exp_name":inputs.get("exp_name"),
+                            "opt_dir":opt_dir,
+                            "bert_pretrained_dir":self.configs.bert_base_path,
+                            "is_half": str(inputs.get("is_true", True))
+                        }
+                        gpu_names=inputs.get("gpu_numbers1a").split("-")
+                        all_parts=len(gpu_names)
+                        
+                        for i_part in range(all_parts):
+                            config.update(
+                                {
+                                    "i_part": str(i_part),
+                                    "all_parts": str(all_parts),
+                                    "_CUDA_VISIBLE_DEVICES": gpu_names[i_part],
+                                }
+                            )
+                            os.environ.update(config)
+                            run_file = os.path.join(current_dir, "../prepare_datasets/1-get-text.py")
+                            cmd = f"{python_exec} {run_file}"
+                            print(cmd)
+                            p = Popen(cmd, shell=True)
+                            ps1abc.append(p)
+                        # yield "进度：1a-ing", {"__type__": "update", "visible": False}, {"__type__": "update", "visible": True}
+                        print("--------------------> 进度：1a-ing")
+                        for p in ps1abc:p.wait()
+
+                        opt = []
+                        for i_part in range(all_parts):#txt_path="%s/2-name2text-%s.txt"%(opt_dir,i_part)
+                            txt_path = "%s/2-name2text-%s.txt" % (opt_dir, i_part)
+                            with open(txt_path, "r",encoding="utf8") as f:
+                                opt += f.read().strip("\n").split("\n")
+                            os.remove(txt_path)
+                        with open(path_text, "w",encoding="utf8") as f:
+                            f.write("\n".join(opt) + "\n")
+
+                    # yield "进度：1a-done", {"__type__": "update", "visible": False}, {"__type__": "update", "visible": True}
+                    print("--------------------> 进度：1a-done")
+                    ps1abc=[]
+                    #############################1b
+                    config={
+                        "inp_text":inp_text,
+                        "inp_wav_dir":inp_wav_dir,
+                        "exp_name":inputs.get("exp_name"),
+                        "opt_dir":opt_dir,
+                        "cnhubert_base_dir":self.configs.cnhuhbert_base_path,
+                    }
+                    gpu_names=inputs.get("gpu_numbers1Ba").split("-")
+                    all_parts=len(gpu_names)
+                    for i_part in range(all_parts):
+                        config.update(
+                            {
+                                "i_part": str(i_part),
+                                "all_parts": str(all_parts),
+                                "_CUDA_VISIBLE_DEVICES": gpu_names[i_part],
+                            }
+                        )
+                        os.environ.update(config)
+                        run_file = os.path.join(current_dir, "../prepare_datasets/2-get-hubert-wav32k.py")
+                        cmd = f"{python_exec} {run_file}"
+                        print(cmd)
+                        p = Popen(cmd, shell=True)
+                        ps1abc.append(p)
+                    # yield "进度：1a-done, 1b-ing", {"__type__": "update", "visible": False}, {"__type__": "update", "visible": True}
+                    print("--------------------> 进度：1a-done, 1b-ing")
+                    for p in ps1abc:p.wait()
+                    # yield "进度：1a1b-done", {"__type__": "update", "visible": False}, {"__type__": "update", "visible": True}
+                    print("--------------------> 进度：1a1b-done")
+                    ps1abc=[]
+                    #############################1c
+                    path_semantic = "%s/6-name2semantic.tsv" % opt_dir
+                    if(os.path.exists(path_semantic)==False or (os.path.exists(path_semantic)==True and os.path.getsize(path_semantic)<31)):
+                        config={
+                            "inp_text":inp_text,
+                            "exp_name":inputs.get("exp_name"),
+                            "opt_dir":opt_dir,
+                            "pretrained_s2G":self.configs.vits_weights_path,
+                            "s2config_path":f"{current_dir}/../configs/s2.json",
+                        }
+                        gpu_names=inputs.get("gpu_numbers1c").split("-")
+                        all_parts=len(gpu_names)
+                        for i_part in range(all_parts):
+                            config.update(
+                                {
+                                    "i_part": str(i_part),
+                                    "all_parts": str(all_parts),
+                                    "_CUDA_VISIBLE_DEVICES": gpu_names[i_part],
+                                }
+                            )
+                            os.environ.update(config)
+                            run_file = os.path.join(current_dir, "../prepare_datasets/3-get-semantic.py")
+                            cmd = f"{python_exec} {run_file}"
+                            print(cmd)
+                            p = Popen(cmd, shell=True)
+                            ps1abc.append(p)
+                        # yield "进度：1a1b-done, 1cing", {"__type__": "update", "visible": False}, {"__type__": "update", "visible": True}
+                        print("--------------------> 进度：1a1b-done, 1cing")
+                        for p in ps1abc:p.wait()
+
+                        opt = ["item_name\tsemantic_audio"]
+                        for i_part in range(all_parts):
+                            semantic_path = "%s/6-name2semantic-%s.tsv" % (opt_dir, i_part)
+                            with open(semantic_path, "r",encoding="utf8") as f:
+                                opt += f.read().strip("\n").split("\n")
+                            os.remove(semantic_path)
+                        with open(path_semantic, "w",encoding="utf8") as f:
+                            f.write("\n".join(opt) + "\n")
+                        # yield "进度：all-done", {"__type__": "update", "visible": False}, {"__type__": "update", "visible": True}
+                        print("--------------------> 进度：all-done")
+                    ps1abc = []
+                    # yield "一键三连进程结束", {"__type__": "update", "visible": True}, {"__type__": "update", "visible": False}
+                except:
+                    traceback.print_exc()
+                    close1abc(ps1abc != [])
+                    # yield "一键三连中途报错", {"__type__": "update", "visible": True}, {"__type__": "update", "visible": False}
+                    print("--------------------> 进度：一键三连中途报错")
+            else:
+                print("--------------------> 已有正在进行的一键三连任务，需先终止才能开启下一次任务")
+                # yield "已有正在进行的一键三连任务，需先终止才能开启下一次任务", {"__type__": "update", "visible": False}, {"__type__": "update", "visible": True}
+        def close1abc(ps1abc):
+            for p1abc in ps1abc:
+                try:
+                    kill_process(p1abc.pid)
+                except:
+                    traceback.print_exc()
+            print("--------------------> 已终止所有一键三连进程")
+
+        def kill_process(pid):
+            system=platform.system()
+            if(system=="Windows"):
+                cmd = "taskkill /t /f /pid %s" % pid
+                os.system(cmd)
+            else:
+                kill_proc_tree(pid)
+
+        def kill_proc_tree(pid, including_parent=True):  
+            try:
+                parent = psutil.Process(pid)
+            except psutil.NoSuchProcess:
+                # Process already terminated
+                return
+
+            children = parent.children(recursive=True)
+            for child in children:
+                try:
+                    os.kill(child.pid, signal.SIGTERM)  # or signal.SIGKILL
+                except OSError:
+                    pass
+            if including_parent:
+                try:
+                    os.kill(parent.pid, signal.SIGTERM)  # or signal.SIGKILL
+                except OSError:
+                    pass
+        
+        def open1Ba():
+            p_train_SoVITS = None
+            if(p_train_SoVITS==None):  
+                with open(f"{current_dir}/../configs/s2.json")as f:
+                    data=f.read()
+                    data=json.loads(data)
+                s2_dir="%s/%s"%(inputs.get("exp_root"),inputs.get("exp_name"))
+                os.makedirs("%s/logs_s2"%(s2_dir),exist_ok=True)
+                if(inputs.get("is_true", True)==False):
+                    data["train"]["fp16_run"]=False
+                    batch_size=max(1,inputs.get("batch_size1Ba")//2)
+                else:
+                    batch_size = inputs.get("batch_size1Ba")
+                data["train"]["batch_size"]=batch_size
+                data["train"]["epochs"]=inputs.get("total_epoch1Ba")
+                data["train"]["text_low_lr_rate"]=inputs.get("text_low_lr_rate1Ba")
+                data["train"]["pretrained_s2G"]=self.configs.vits_weights_path
+                data["train"]["pretrained_s2D"]=self.configs.pretrained_s2D
+                data["train"]["if_save_latest"]=inputs.get("if_save_latest")
+                data["train"]["if_save_every_weights"]=inputs.get("if_save_every_weights")
+                data["train"]["save_every_epoch"]=inputs.get("save_every_epoch1Ba")
+                data["train"]["gpu_numbers"]=inputs.get("gpu_numbers1Ba")
+                data["data"]["exp_dir"]=data["s2_ckpt_dir"]=s2_dir
+                data["save_weight_dir"]=inputs.get("sovits_weight_root")
+                data["name"]=inputs.get("exp_name")
+                tmp_config_path="%s/tmp_s2.json"%tmp
+                with open(tmp_config_path,"w")as f:f.write(json.dumps(data))
+                cmd = '"%s" %s/s2_train.py --config "%s"'%(python_exec,current_dir,tmp_config_path)
+                # yield "SoVITS训练开始：%s"%cmd,{"__type__":"update","visible":False},{"__type__":"update","visible":True}
+                print("--------------------> SoVITS训练开始")
+                print(cmd)
+                p_train_SoVITS = Popen(cmd, shell=True)
+                p_train_SoVITS.wait()
+                p_train_SoVITS=None
+                # yield "SoVITS训练完成",{"__type__":"update","visible":True},{"__type__":"update","visible":False}
+                print("--------------------> SoVITS训练完成")       
+            else:
+                # yield "已有正在进行的SoVITS训练任务，需先终止才能开启下一次任务",{"__type__":"update","visible":False},{"__type__":"update","visible":True}
+                print("--------------------> 已有正在进行的SoVITS训练任务，需先终止才能开启下一次任务")
+
+        def open1Bb():
+            p_train_GPT=None
+            if(p_train_GPT==None):
+                with open(f"{current_dir}/../configs/s1longer.yaml")as f:
+                    data=f.read()
+                    data=yaml.load(data, Loader=yaml.FullLoader)
+                s1_dir="%s/%s"%(inputs.get("exp_root"),inputs.get("exp_name"))
+                os.makedirs("%s/logs_s1"%(s1_dir),exist_ok=True)
+                if(inputs.get("is_half")==False):
+                    data["train"]["precision"]="32"
+                    batch_size = max(1, inputs.get("batch_size1Bb") // 2)
+                else:
+                    batch_size = inputs.get("batch_size1Bb")
+                data["train"]["batch_size"]=batch_size
+                data["train"]["epochs"]=inputs.get("total_epoch1Bb")
+                data["pretrained_s1"]=self.configs.t2s_weights_path
+                data["train"]["save_every_n_epoch"]=inputs.get("save_every_epoch")
+                data["train"]["if_save_every_weights"]=inputs.get("if_save_every_weights")
+                data["train"]["if_save_latest"]=inputs.get("if_save_latest")
+                data["train"]["if_dpo"]=inputs.get("if_dpo")
+                data["train"]["half_weights_save_dir"]=inputs.get("gpt_weight_root")
+                data["train"]["exp_name"]=inputs.get("exp_name")
+                data["train_semantic_path"]="%s/6-name2semantic.tsv"%s1_dir
+                data["train_phoneme_path"]="%s/2-name2text.txt"%s1_dir
+                data["output_dir"]="%s/logs_s1"%s1_dir
+
+                os.environ["_CUDA_VISIBLE_DEVICES"]=inputs.get("gpu_numbers1Bb").replace("-",",")
+                os.environ["hz"]="25hz"
+                tmp_config_path="%s/tmp_s1.yaml"%tmp
+                with open(tmp_config_path, "w") as f:f.write(yaml.dump(data, default_flow_style=False))
+                # cmd = '"%s" GPT_SoVITS/s1_train.py --config_file "%s" --train_semantic_path "%s/6-name2semantic.tsv" --train_phoneme_path "%s/2-name2text.txt" --output_dir "%s/logs_s1"'%(python_exec,tmp_config_path,s1_dir,s1_dir,s1_dir)
+                cmd = '"%s" %s/s1_train.py --config_file "%s" '%(python_exec,current_dir,tmp_config_path)
+                # yield "GPT训练开始：%s"%cmd,{"__type__":"update","visible":False},{"__type__":"update","visible":True}
+                print("--------------------> GPT训练开始：")
+                print(cmd)
+                p_train_GPT = Popen(cmd, shell=True)
+                p_train_GPT.wait()
+                p_train_GPT=None
+                # yield "GPT训练完成",{"__type__":"update","visible":True},{"__type__":"update","visible":False}
+                print("--------------------> GPT训练完成")
+            else:
+                # yield "已有正在进行的GPT训练任务，需先终止才能开启下一次任务",{"__type__":"update","visible":False},{"__type__":"update","visible":True}
+                print("--------------------> 已有正在进行的GPT训练任务，需先终止才能开启下一次任务")
+
+        open1abc()
+        open1Ba()
+        open1Bb()
+
         
        
 def speed_change(input_audio:np.ndarray, speed:float, sr:int):

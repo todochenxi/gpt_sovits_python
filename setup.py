@@ -16,7 +16,7 @@ setup(
     url="https://github.com/R3gm/gpt_sovits_python",
     license="MIT",
     packages=find_packages(),
-    package_data={'': ['*.txt', '*.rep', '*.pickle']},
+    package_data={'': ['*.txt', '*.rep', '*.pickle', "*.json", "*.yaml"], 'gpt_sovits_python': ['configs/*.yaml', 'configs/*.json']},
     install_requires=[
         "ffmpeg-python",
         "pyopenjtalk",
