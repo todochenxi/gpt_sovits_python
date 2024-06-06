@@ -20,7 +20,7 @@ import torch.multiprocessing as mp
 from glob import glob
 from tqdm import tqdm
 import logging, librosa, utils, torch
-from module.models import SynthesizerTrn
+from gpt_sovits_python.module.models import SynthesizerTrn
 
 logging.getLogger("numba").setLevel(logging.WARNING)
 # from config import pretrained_s2G

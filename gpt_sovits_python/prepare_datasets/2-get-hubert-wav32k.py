@@ -7,7 +7,7 @@ exp_name=                           os.environ.get("exp_name")
 i_part=                             os.environ.get("i_part")
 all_parts=                          os.environ.get("all_parts")
 os.environ["CUDA_VISIBLE_DEVICES"]= os.environ.get("_CUDA_VISIBLE_DEVICES")
-from feature_extractor import cnhubert
+from gpt_sovits_python.feature_extractor import cnhubert
 opt_dir=                            os.environ.get("opt_dir")
 cnhubert.cnhubert_base_path=                os.environ.get("cnhubert_base_dir")
 is_half=eval(os.environ.get("is_half","True"))
@@ -17,7 +17,7 @@ from scipy.io import wavfile
 import librosa,torch
 now_dir = os.getcwd()
 sys.path.append(now_dir)
-from my_utils import load_audio
+from gpt_sovits_python.utils import load_audio
 
 # from config import cnhubert_base_path
 # cnhubert.cnhubert_base_path=cnhubert_base_path

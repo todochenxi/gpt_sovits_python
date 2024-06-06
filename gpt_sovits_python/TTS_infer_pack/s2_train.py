@@ -17,20 +17,20 @@ logging.getLogger("matplotlib").setLevel(logging.INFO)
 logging.getLogger("h5py").setLevel(logging.INFO)
 logging.getLogger("numba").setLevel(logging.INFO)
 from random import randint
-from module import commons
+from gpt_sovits_python.module import commons
 
-from module.data_utils import (
+from gpt_sovits_python.module.data_utils import (
     TextAudioSpeakerLoader,
     TextAudioSpeakerCollate,
     DistributedBucketSampler,
 )
-from module.models import (
+from gpt_sovits_python.module.models import (
     SynthesizerTrn,
     MultiPeriodDiscriminator,
 )
-from module.losses import generator_loss, discriminator_loss, feature_loss, kl_loss
-from module.mel_processing import mel_spectrogram_torch, spec_to_mel_torch
-from process_ckpt import savee
+from gpt_sovits_python.module.losses import generator_loss, discriminator_loss, feature_loss, kl_loss
+from gpt_sovits_python.module.mel_processing import mel_spectrogram_torch, spec_to_mel_torch
+from gpt_sovits_python.TTS_infer_pack.process_ckpt import savee
 
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = False
