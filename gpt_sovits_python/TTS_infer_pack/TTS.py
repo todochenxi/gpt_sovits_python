@@ -79,8 +79,8 @@ class TTS_Config:
     default_configs={
                 "device": "cpu",
                 "is_half": False,
-                "t2s_weights_path": "pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt",
-                "vits_weights_path": "pretrained_models/s2G488k.pth",
+                # "t2s_weights_path": "pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt",
+                # "vits_weights_path": "pretrained_models/s2G488k.pth",
                 "pretrained_s2D": "pretrained_models/s2D488k.pth",
                 "cnhuhbert_base_path": "pretrained_models/chinese-hubert-base",
                 "bert_base_path": "pretrained_models/chinese-roberta-wwm-ext-large",
@@ -113,19 +113,11 @@ class TTS_Config:
         
         self.device = self.configs.get("device", torch.device("cpu"))
         self.is_half = self.configs.get("is_half", False)
-        self.t2s_weights_path = self.configs.get("t2s_weights_path", None)
-        self.vits_weights_path = self.configs.get("vits_weights_path", None)
         self.bert_base_path = self.configs.get("bert_base_path", None)
         self.cnhuhbert_base_path = self.configs.get("cnhuhbert_base_path", None)
         self.pretrained_s2D = self.configs.get("pretrained_s2D", None)
 
-        
-        if (self.t2s_weights_path in [None, ""]) or (not os.path.exists(self.t2s_weights_path)):
-            self.t2s_weights_path = self.default_configs['t2s_weights_path']
-            logger.debug(f"fall back to default t2s_weights_path: {self.t2s_weights_path}")
-        if (self.vits_weights_path in [None, ""]) or (not os.path.exists(self.vits_weights_path)):
-            self.vits_weights_path = self.default_configs['vits_weights_path']
-            logger.debug(f"fall back to default vits_weights_path: {self.vits_weights_path}")
+    
         if (self.bert_base_path in [None, ""]) or (not os.path.exists(self.bert_base_path)):
             self.bert_base_path = self.default_configs['bert_base_path']
             logger.debug(f"fall back to default bert_base_path: {self.bert_base_path}")
@@ -172,8 +164,6 @@ class TTS_Config:
         self.config = {
             "device"             : str(self.device),
             "is_half"            : self.is_half,
-            "t2s_weights_path"   : self.t2s_weights_path,
-            "vits_weights_path"  : self.vits_weights_path,
             "bert_base_path"     : self.bert_base_path,
             "cnhuhbert_base_path": self.cnhuhbert_base_path,
         }
@@ -198,8 +188,6 @@ class TTS:
         else:
             self.configs:TTS_Config = TTS_Config(configs)
         
-        self.t2s_model:Text2SemanticLightningModule = None
-        self.vits_model:SynthesizerTrn = None
         self.bert_tokenizer:AutoTokenizer = None
         self.bert_model:AutoModelForMaskedLM = None
         self.cnhuhbert_model:CNHubert = None
@@ -227,11 +215,22 @@ class TTS:
         self.stop_flag:bool = False
         self.precision:torch.dtype = torch.float16 if self.configs.is_half else torch.float32
 
+    def _init_models_in_run_and_train(self, t2s_weights_path, vits_weights_path):
+        t0 =ttime()
+        self.init_t2s_weights(t2s_weights_path)
+        print("---------------->t2stime", ttime() - t0)
+        t0 = ttime()
+        self.init_vits_weights(vits_weights_path)
+        print("---------------->vitstime", ttime() - t0)
+
     def _init_models(self,):
-        self.init_t2s_weights(self.configs.t2s_weights_path)
-        self.init_vits_weights(self.configs.vits_weights_path)
+        t0 = ttime()
         self.init_bert_weights(self.configs.bert_base_path)
+        print("---------------->berttime", ttime() - t0)
+        t0 = ttime()
         self.init_cnhuhbert_weights(self.configs.cnhuhbert_base_path)
+        print("---------------->cnhuhberttime", ttime() - t0)
+        t0 = ttime()
         # self.enable_half_precision(self.configs.is_half)
         
         
@@ -257,8 +256,6 @@ class TTS:
         
     def init_vits_weights(self, weights_path: str):
         logger.info(f"Loading VITS weights from {weights_path}")
-        self.configs.vits_weights_path = weights_path
-        self.configs.save_configs()
         dict_s2 = torch.load(weights_path, map_location=self.configs.device)
         hps = dict_s2["config"]
         self.configs.filter_length = hps["data"]["filter_length"]
@@ -289,8 +286,6 @@ class TTS:
         
     def init_t2s_weights(self, weights_path: str):
         logger.info(f"Loading Text2Semantic weights from {weights_path}")
-        self.configs.t2s_weights_path = weights_path
-        self.configs.save_configs()
         self.configs.hz = 50
         dict_s1 = torch.load(weights_path, map_location=self.configs.device)
         config = dict_s1["config"]
@@ -606,6 +601,7 @@ class TTS:
         returns:
             tuple[int, np.ndarray]: sampling rate and audio data.
         """
+        self._init_models_in_run_and_train(inputs.get("t2s_weights_path"), inputs.get("vits_weights_path"))
         ########## variables initialization ###########
         self.stop_flag:bool = False
         text:str = inputs.get("text", "")
@@ -922,6 +918,7 @@ class TTS:
         return sr, audio
             
     def train(self, inputs:dict):
+        self._init_models_in_run_and_train(inputs.get("t2s_weights_path"), inputs.get("vits_weights_path"))
         python_exec = sys.executable or "python"
         tmp = os.path.join(now_dir, "TEMP")
         current_dir = os.path.dirname(os.path.abspath(__file__))
