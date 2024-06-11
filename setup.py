@@ -38,6 +38,7 @@ setup(
         "numpy",
         "scipy",
         "tensorboard",
+        "matplotlib",
         "librosa==0.9.2",
         "numba==0.56.4",
         "ffmpeg-python",

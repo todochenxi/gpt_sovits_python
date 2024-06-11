@@ -186,6 +186,16 @@ class TTS_Config:
     def __repr__(self):
         return self.__str__()
 
+base_vits_model = None
+base_t2s_model = None
+global_vits_model = None
+global_t2s_model = None
+global_models = {
+    "base_vits_model": None,
+    "base_t2s_model": None,
+    "global_vits_model": None,
+    "global_t2s_model": None
+}
 
 class TTS:
     def __init__(self, configs: Union[dict, str, TTS_Config]):
@@ -193,12 +203,11 @@ class TTS:
             self.configs = configs
         else:
             self.configs:TTS_Config = TTS_Config(configs)
-        global global_vits_model, global_t2s_model
         self.bert_tokenizer:AutoTokenizer = None
         self.bert_model:AutoModelForMaskedLM = None
         self.cnhuhbert_model:CNHubert = None
         self.last_model_paths = {"vits_weights_path": self.configs.vits_weights_path, "t2s_weights_path": self.configs.t2s_weights_path}
-        
+        self.current_model_paths = {"vits_weights_path": self.configs.vits_weights_path, "t2s_weights_path": self.configs.t2s_weights_path}
         self._init_models()
         
         self.text_preprocessor:TextPreprocessor = \
@@ -223,16 +232,18 @@ class TTS:
         self.precision:torch.dtype = torch.float16 if self.configs.is_half else torch.float32
 
     def _init_models_in_run_and_train(self, t2s_weights_path, vits_weights_path):
+        global global_models
         t0 =ttime()
         self.last_model_paths["vits_weights_path"] = vits_weights_path
         self.last_model_paths["t2s_weights_path"] = t2s_weights_path
-        self.init_t2s_weights(t2s_weights_path)
+        global_models["global_t2s_model"] = self.init_t2s_weights(t2s_weights_path)
         print("---------------->t2stime", ttime() - t0)
         t0 = ttime()
-        self.init_vits_weights(vits_weights_path)
+        global_models["global_vits_model"] = self.init_vits_weights(vits_weights_path)
         print("---------------->vitstime", ttime() - t0)
 
     def _init_models(self,):
+        global global_models
         t0 = ttime()
         self.init_bert_weights(self.configs.bert_base_path)
         print("---------------->berttime", ttime() - t0)
@@ -240,12 +251,12 @@ class TTS:
         self.init_cnhuhbert_weights(self.configs.cnhuhbert_base_path)
         print("---------------->cnhuhberttime", ttime() - t0)
         t0 = ttime()
-        self.init_t2s_weights(self.configs.t2s_weights_path)
+        global_models["base_t2s_model"] = self.init_t2s_weights(self.configs.t2s_weights_path)
         print("---------------->t2stime", ttime() - t0)
         t0 = ttime()
-        self.init_vits_weights(self.configs.vits_weights_path)
+        global_models["base_vits_model"] = self.init_vits_weights(self.configs.vits_weights_path)
         print("---------------->vitstime", ttime() - t0)
-        # self.enable_half_precision(self.configs.is_half)
+        # base_vits_model, base_t2s_model = self.enable_half_precision(base_vits_model, base_t2s_model, self.configs.is_half)
         
         
         
@@ -293,10 +304,9 @@ class TTS:
         vits_model = vits_model.to(self.configs.device)
         vits_model = vits_model.eval()
         vits_model.load_state_dict(dict_s2["weight"], strict=False)
-        global global_vits_model
-        global_vits_model = vits_model
         if self.configs.is_half and str(self.configs.device)!="cpu":
-            global_vits_model = global_vits_model.half()
+            vits_model = vits_model.half()
+        return vits_model
 
         
     def init_t2s_weights(self, weights_path: str):
@@ -309,12 +319,11 @@ class TTS:
         t2s_model.load_state_dict(dict_s1["weight"])
         t2s_model = t2s_model.to(self.configs.device)
         t2s_model = t2s_model.eval()
-        global global_t2s_model
-        global_t2s_model = t2s_model
         if self.configs.is_half and str(self.configs.device)!="cpu":
-            global_t2s_model = global_t2s_model.half()
+            t2s_model = t2s_model.half()
+        return t2s_model
         
-    def enable_half_precision(self, enable: bool = True):
+    def enable_half_precision(self, vits_model, t2s_model, enable: bool = True):
         '''
             To enable half precision for the TTS model.
             Args:
@@ -329,24 +338,24 @@ class TTS:
         self.precision = torch.float16 if enable else torch.float32
         self.configs.save_configs()
         if enable:
-            global global_t2s_model, global_vits_model
-            if global_t2s_model is not None:
-                global_t2s_model =global_t2s_model.half()
-            if global_vits_model is not None:
-                global_vits_model = global_vits_model.half()
+            if t2s_model is not None:
+                t2s_model = t2s_model.half()
+            if vits_model is not None:
+                vits_model = vits_model.half()
             if self.bert_model is not None:
                 self.bert_model =self.bert_model.half()
             if self.cnhuhbert_model is not None:
                 self.cnhuhbert_model = self.cnhuhbert_model.half()
         else:
-            if global_t2s_model is not None:
-                global_t2s_model = global_t2s_model.float()
-            if global_vits_model is not None:
-                global_vits_model = global_vits_model.float()
+            if t2s_model is not None:
+                t2s_model = t2s_model.float()
+            if vits_model is not None:
+                vits_model = vits_model.float()
             if self.bert_model is not None:
                 self.bert_model = self.bert_model.float()
             if self.cnhuhbert_model is not None:
                 self.cnhuhbert_model = self.cnhuhbert_model.float()
+        return vits_model, t2s_model
                 
     def set_device(self, device: torch.device):
     
@@ -398,7 +407,6 @@ class TTS:
         
         
     def _set_prompt_semantic(self, ref_wav_path:str):
-        global global_t2s_model, global_vits_model
         zero_wav = np.zeros(
             int(self.configs.sampling_rate * 0.3),
             dtype=np.float16 if self.configs.is_half else np.float32,
@@ -421,8 +429,12 @@ class TTS:
             ].transpose(
                 1, 2
             )  # .float()
-            codes = global_vits_model.extract_latent(hubert_feature)
-    
+            if self.current_model_paths["vits_weights_path"] == self.configs.vits_weights_path:
+                key = "base_vits_model"
+            else:
+                key = "global_vits_model"
+            global global_models
+            codes = global_models[key].extract_latent(hubert_feature)
             prompt_semantic = codes[0, 0].to(self.configs.device)
             self.prompt_cache["prompt_semantic"] = prompt_semantic
     
@@ -621,9 +633,16 @@ class TTS:
         returns:
             tuple[int, np.ndarray]: sampling rate and audio data.
         """
-        global global_t2s_model, global_vits_model
-        if self.last_model_paths["t2s_weights_path"] != inputs.get("t2s_weights_path"):
+        global global_models
+        self.current_model_paths = {"t2s_weights_path": inputs.get("t2s_weights_path"), "vits_weights_path": inputs.get("vits_weights_path")}
+        if (self.last_model_paths["t2s_weights_path"] != inputs.get("t2s_weights_path")) & (self.configs.t2s_weights_path != inputs.get("t2s_weights_path")):
             self._init_models_in_run_and_train(inputs.get("t2s_weights_path"), inputs.get("vits_weights_path"))
+        if self.configs.t2s_weights_path == inputs.get("t2s_weights_path"):
+            t2s_key = "base_t2s_model"
+            vits_key = "base_vits_model"
+        else:
+            t2s_key = "global_t2s_model"
+            vits_key = "global_vits_model"
         ########## variables initialization ###########
         self.stop_flag:bool = False
         text:str = inputs.get("text", "")
@@ -650,10 +669,10 @@ class TTS:
 
         if parallel_infer:
             logger.debug("Parallel inference mode is enabled")
-            global_t2s_model.model.infer_panel = global_t2s_model.model.infer_panel_batch_infer_with_flash_attn
+            global_models[t2s_key].model.infer_panel = global_models[t2s_key].model.infer_panel_batch_infer_with_flash_attn
         else:
             logger.debug("Parallel inference mode is turned off")
-            global_t2s_model.model.infer_panel = global_t2s_model.model.infer_panel_0307
+            global_models[t2s_key].model.infer_panel = global_models[t2s_key].model.infer_panel_0307
 
         if return_fragment:
             # split_bucket = False
@@ -784,7 +803,7 @@ class TTS:
                 else:
                     prompt = self.prompt_cache["prompt_semantic"].expand(len(all_phoneme_ids), -1).to(self.configs.device)
 
-                pred_semantic_list, idx_list = global_t2s_model.model.infer_panel(
+                pred_semantic_list, idx_list = global_models[t2s_key].model.infer_panel(
                     all_phoneme_ids,
                     all_phoneme_lens,
                     prompt,
@@ -823,12 +842,12 @@ class TTS:
 
                 # ## vits并行推理 method 2
                 pred_semantic_list = [item[-idx:] for item, idx in zip(pred_semantic_list, idx_list)]
-                upsample_rate = math.prod(global_vits_model.upsample_rates)
+                upsample_rate = math.prod(global_models[vits_key].upsample_rates)
                 audio_frag_idx = [pred_semantic_list[i].shape[0]*2*upsample_rate for i in range(0, len(pred_semantic_list))]
                 audio_frag_end_idx = [ sum(audio_frag_idx[:i+1]) for i in range(0, len(audio_frag_idx))]
                 all_pred_semantic = torch.cat(pred_semantic_list).unsqueeze(0).unsqueeze(0).to(self.configs.device)
                 _batch_phones = torch.cat(batch_phones).unsqueeze(0).to(self.configs.device)
-                _batch_audio_fragment = (global_vits_model.decode(
+                _batch_audio_fragment = (global_models[vits_key].decode(
                         all_pred_semantic, _batch_phones, refer_audio_spec
                     ).detach()[0, 0, :])
                 audio_frag_end_idx.insert(0, 0)
@@ -880,12 +899,13 @@ class TTS:
             yield self.configs.sampling_rate, np.zeros(int(self.configs.sampling_rate),
                                                             dtype=np.int16)
             # 重置模型, 否则会导致显存释放不完全。
-            del global_t2s_model
-            del global_vits_model
-            global_t2s_model = None
-            global_vits_model = None
-            self.init_t2s_weights(self.configs.t2s_weights_path)
-            self.init_vits_weights(self.configs.vits_weights_path)
+            del global_models[t2s_key]
+            del global_models[vits_key]
+            global_models[t2s_key] = None
+            global_models[vits_key] = None
+            if vits_key == "base_vits_model":
+                global_models[vits_key] = self.init_t2s_weights(self.configs.t2s_weights_path)
+                global_models[t2s_key] = self.init_vits_weights(self.configs.vits_weights_path)
             raise e
         finally:
             self.empty_cache()
