@@ -960,7 +960,6 @@ class TTS:
         return sr, audio
             
     def train(self, inputs:dict):
-        self._init_models_in_run_and_train(inputs.get("t2s_weights_path"), inputs.get("vits_weights_path"))
         python_exec = sys.executable or "python"
         tmp = os.path.join(now_dir, "TEMP")
         current_dir = os.path.dirname(os.path.abspath(__file__))
