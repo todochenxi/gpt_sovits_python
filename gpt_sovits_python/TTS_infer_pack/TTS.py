@@ -302,6 +302,7 @@ class TTS:
             del vits_model.enc_q
             
         vits_model = vits_model.to(self.configs.device)
+        print("compile")
         vits_model = vits_model.eval()
         vits_model.load_state_dict(dict_s2["weight"], strict=False)
         if self.configs.is_half and str(self.configs.device)!="cpu":
@@ -827,42 +828,44 @@ class TTS:
                 # 这里要记得加 torch.no_grad() 不然速度慢一大截
                 # with torch.no_grad():
             
-                # ## vits并行推理 method 1
-                # pred_semantic_list = [item[-idx:] for item, idx in zip(pred_semantic_list, idx_list)]
-                # pred_semantic_len = torch.LongTensor([item.shape[0] for item in pred_semantic_list]).to(self.configs.device)
-                # pred_semantic = self.batch_sequences(pred_semantic_list, axis=0, pad_value=0).unsqueeze(0)
-                # max_len = 0
-                # for i in range(0, len(batch_phones)):
-                #     max_len = max(max_len, batch_phones[i].shape[-1])
-                # batch_phones = self.batch_sequences(batch_phones, axis=0, pad_value=0, max_length=max_len)
-                # batch_phones = batch_phones.to(self.configs.device)
-                # batch_audio_fragment = (global_vits_model.batched_decode(
-                #         pred_semantic, pred_semantic_len, batch_phones, batch_phones_len,refer_audio_spec
-                #     ))
+                #     ## vits并行推理 method 1
+                #     pred_semantic_list = [item[-idx:] for item, idx in zip(pred_semantic_list, idx_list)]
+                #     pred_semantic_len = torch.LongTensor([item.shape[0] for item in pred_semantic_list]).to(self.configs.device)
+                #     pred_semantic = self.batch_sequences(pred_semantic_list, axis=0, pad_value=0).unsqueeze(0)
+                #     max_len = 0
+                #     for i in range(0, len(batch_phones)):
+                #         max_len = max(max_len, batch_phones[i].shape[-1])
+                #     batch_phones = self.batch_sequences(batch_phones, axis=0, pad_value=0, max_length=max_len)
+                #     batch_phones = batch_phones.to(self.configs.device)
+                #     batch_audio_fragment = (global_vits_model.batched_decode(
+                #             pred_semantic, pred_semantic_len, batch_phones, batch_phones_len,refer_audio_spec
+                #         ))
 
-                # ## vits并行推理 method 2
-                pred_semantic_list = [item[-idx:] for item, idx in zip(pred_semantic_list, idx_list)]
-                upsample_rate = math.prod(global_models[vits_key].upsample_rates)
-                audio_frag_idx = [pred_semantic_list[i].shape[0]*2*upsample_rate for i in range(0, len(pred_semantic_list))]
-                audio_frag_end_idx = [ sum(audio_frag_idx[:i+1]) for i in range(0, len(audio_frag_idx))]
-                all_pred_semantic = torch.cat(pred_semantic_list).unsqueeze(0).unsqueeze(0).to(self.configs.device)
-                _batch_phones = torch.cat(batch_phones).unsqueeze(0).to(self.configs.device)
-                _batch_audio_fragment = (global_models[vits_key].decode(
-                        all_pred_semantic, _batch_phones, refer_audio_spec
-                    ).detach()[0, 0, :])
-                audio_frag_end_idx.insert(0, 0)
-                batch_audio_fragment= [_batch_audio_fragment[audio_frag_end_idx[i-1]:audio_frag_end_idx[i]] for i in range(1, len(audio_frag_end_idx))]
+                ## vits并行推理 method 2
+                with torch.no_grad():
+                    pred_semantic_list = [item[-idx:] for item, idx in zip(pred_semantic_list, idx_list)]
+                    upsample_rate = math.prod(global_models[vits_key].upsample_rates)
+                    audio_frag_idx = [pred_semantic_list[i].shape[0]*2*upsample_rate for i in range(0, len(pred_semantic_list))]
+                    audio_frag_end_idx = [ sum(audio_frag_idx[:i+1]) for i in range(0, len(audio_frag_idx))]
+                    all_pred_semantic = torch.cat(pred_semantic_list).unsqueeze(0).unsqueeze(0).to(self.configs.device)
+                    _batch_phones = torch.cat(batch_phones).unsqueeze(0).to(self.configs.device)
+                    _batch_audio_fragment = (global_models[vits_key].decode(
+                            all_pred_semantic, _batch_phones, refer_audio_spec
+                        ).detach()[0, 0, :])
+                    audio_frag_end_idx.insert(0, 0)
+                    batch_audio_fragment= [_batch_audio_fragment[audio_frag_end_idx[i-1]:audio_frag_end_idx[i]] for i in range(1, len(audio_frag_end_idx))]
 
-                # ## vits串行推理
-                # for i, idx in enumerate(idx_list):
-                #     phones = batch_phones[i].unsqueeze(0).to(self.configs.device)
-                #     _pred_semantic = (pred_semantic_list[i][-idx:].unsqueeze(0).unsqueeze(0))   # .unsqueeze(0)#mq要多unsqueeze一次
-                #     audio_fragment =(global_vits_model.decode(
-                #             _pred_semantic, phones, refer_audio_spec
-                #         ).detach()[0, 0, :])
-                #     batch_audio_fragment.append(
-                #         audio_fragment
-                #     )  ###试试重建不带上prompt部分
+                ## vits串行推理
+                # with torch.no_grad():
+                #     for i, idx in enumerate(idx_list):
+                #         phones = batch_phones[i].unsqueeze(0).to(self.configs.device)
+                #         _pred_semantic = (pred_semantic_list[i][-idx:].unsqueeze(0).unsqueeze(0))   # .unsqueeze(0)#mq要多unsqueeze一次
+                #         audio_fragment =(global_vits_model.decode(
+                #                 _pred_semantic, phones, refer_audio_spec
+                #             ).detach()[0, 0, :])
+                #         batch_audio_fragment.append(
+                #             audio_fragment
+                #         )  ###试试重建不带上prompt部分
 
                 t5 = ttime()
                 t_45 += t5 - t4
